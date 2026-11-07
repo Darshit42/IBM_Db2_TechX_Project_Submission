@@ -134,6 +134,9 @@ class Db2:
                 raise _err(stmt=stmt)
             ncols = ibm_db.num_fields(stmt)
             cols = [ibm_db.field_name(stmt, i) for i in range(ncols)]
+            # ibm_db hands DECIMAL/DECFLOAT back as str; convert so JSON/charts see numbers.
+            dec_idx = [i for i in range(ncols)
+                       if str(ibm_db.field_type(stmt, i)).lower() in ("decimal", "decfloat", "numeric")]
             rows: list[list[Any]] = []
             truncated = False
             while True:
@@ -143,7 +146,14 @@ class Db2:
                 if max_rows is not None and len(rows) >= max_rows:
                     truncated = True
                     break
-                rows.append([to_jsonable(v) for v in row])
+                vals = [to_jsonable(v) for v in row]
+                for i in dec_idx:
+                    if isinstance(vals[i], str):
+                        try:
+                            vals[i] = float(vals[i])
+                        except ValueError:
+                            pass
+                rows.append(vals)
             ibm_db.free_stmt(stmt)
             return cols, rows, truncated
         except Db2Error:
