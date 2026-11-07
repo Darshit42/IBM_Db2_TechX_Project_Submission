@@ -1,0 +1,11 @@
+ibm_db==3.3.0
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+python-dotenv==1.2.4
+pydantic==2.14.3
+langchain-core==1.7.6
+langchain-google-genai==4.4.3
+
+# tests
+pytest==9.2.0
+httpx==0.28.1
