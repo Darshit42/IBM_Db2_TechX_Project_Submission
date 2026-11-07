@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "project": {
+    "title": "Db2 AI Data Analyst: Self-Correcting Text-to-SQL with Vector Memory and EXPLAIN Guardrails",
+    "slug": "db2-ai-data-analyst",
+    "short_description": "Ask business questions in plain English. A LangChain + Gemini agent writes Db2 SQL, validates it with Db2 EXPLAIN against a cost budget, runs it as a SELECT-only Db2 user, self-corrects on Db2 errors, charts and explains the result, and learns from approved answers stored as VECTOR embeddings in Db2.",
+    "category": "AI / Text-to-SQL / Analytics",
+    "demo_url": "",
+    "video_url": "",
+    "repo_url": "https://github.com/Darshit42/IBM_Db2_TechX_Project_Submission/tree/submission/db2-ai-data-analyst/submissions/db2-ai-data-analyst"
+  },
+  "team": {
+    "name": "Darshit42",
+    "members": [
+      {
+        "name": "Darshit",
+        "github": "Darshit42",
+        "email": "Darshit42@users.noreply.github.com",
+        "role": "Full-stack, Db2 integration & AI workflow"
+      }
+    ]
+  },
+  "ibm_db2": {
+    "edition": "IBM Db2 Community Edition 12.1.5 (Docker, icr.io/db2_community/db2)",
+    "connector": "ibm_db (native Python driver)",
+    "features_used": [
+      "VECTOR(768, FLOAT32) column + VECTOR_DISTANCE(..., COSINE) similarity search",
+      "EXPLAIN PLAN + EXPLAIN_STATEMENT / EXPLAIN_OPERATOR / EXPLAIN_STREAM (cost guardrail, access plan)",
+      "SQL PL stored procedure with OUT parameter (audit logging)",
+      "Least-privilege user with GRANT SELECT only (read-only execution)",
+      "SYSCAT catalog introspection (tables, columns, references, COMMENT ON remarks)",
+      "Relational schema with PK/FK/CHECK constraints, composite indexes, reporting views",
+      "RUNSTATS via SYSPROC.ADMIN_CMD, SYSPROC.SYSINSTALLOBJECTS",
+      "Window functions (LAG, OVER PARTITION BY), CTEs, FETCH FIRST",
+      "Batched execute_many loads inside transactions"
+    ]
+  },
+  "tech_stack": {
+    "languages": ["Python", "JavaScript", "SQL"],
+    "frameworks": ["LangChain", "FastAPI", "Chart.js", "Pydantic"],
+    "ai_models": ["Google Gemini 2.5 Flash (SQL generation + summaries)", "Google gemini-embedding-001 (768-dim embeddings)"]
+  }
+}
