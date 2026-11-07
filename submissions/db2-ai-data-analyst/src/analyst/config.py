@@ -34,7 +34,11 @@ class Settings:
     app_schema: str = field(default_factory=lambda: os.getenv("APP_SCHEMA", "ANALYST").upper())
 
     google_api_key: str = field(default_factory=lambda: os.getenv("GOOGLE_API_KEY", ""))
+    # Optional extra keys (comma-separated) used as fallbacks when a key hits its quota.
+    google_api_keys_extra: str = field(default_factory=lambda: os.getenv("GOOGLE_API_KEYS", ""))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    gemini_fallback_models: str = field(
+        default_factory=lambda: os.getenv("GEMINI_FALLBACK_MODELS", "gemini-2.5-flash-lite"))
     embed_model: str = field(default_factory=lambda: os.getenv("GEMINI_EMBED_MODEL", "gemini-embedding-001"))
     embed_dim: int = field(default_factory=lambda: _int("EMBED_DIM", 768))
 
@@ -57,8 +61,22 @@ class Settings:
         return s
 
     @property
+    def api_keys(self) -> list[str]:
+        keys = [self.google_api_key] + self.google_api_keys_extra.split(",")
+        out: list[str] = []
+        for k in (k.strip() for k in keys):
+            if k and k not in out and not k.startswith("your_"):
+                out.append(k)
+        return out
+
+    @property
+    def models(self) -> list[str]:
+        ms = [self.gemini_model] + self.gemini_fallback_models.split(",")
+        return list(dict.fromkeys(m.strip() for m in ms if m.strip()))
+
+    @property
     def llm_enabled(self) -> bool:
-        return bool(self.google_api_key)
+        return bool(self.api_keys)
 
 
 settings = Settings()

@@ -17,28 +17,34 @@ class Embedder:
     def __init__(self, cfg: Settings = settings):
         self.cfg = cfg
         self.dim = cfg.embed_dim
-        self._client = None
-        if cfg.google_api_key:
+        # One client per key; same model, so vectors stay in the same space across keys.
+        self._clients = []
+        if cfg.api_keys:
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-            self._client = GoogleGenerativeAIEmbeddings(
-                model=cfg.embed_model,
-                google_api_key=cfg.google_api_key,
-            )
+            self._clients = [
+                GoogleGenerativeAIEmbeddings(model=cfg.embed_model, google_api_key=k) for k in cfg.api_keys
+            ]
 
     @property
     def provider(self) -> str:
-        return f"gemini:{self.cfg.embed_model}" if self._client else "local-hash"
+        return f"gemini:{self.cfg.embed_model}" if self._clients else "local-hash"
 
     def embed(self, text: str) -> list[float]:
         return self._embed_cached(text.strip())
 
     @lru_cache(maxsize=512)
     def _embed_cached(self, text: str) -> list[float]:
-        if self._client is None:
+        if not self._clients:
             return hash_embed(text, self.dim)
-        vec = self._client.embed_query(text, output_dimensionality=self.dim)
-        return _normalize(list(vec)[: self.dim])
+        last: Exception | None = None
+        for client in self._clients:  # fail over to the next key on quota / transient errors
+            try:
+                vec = client.embed_query(text, output_dimensionality=self.dim)
+                return _normalize(list(vec)[: self.dim])
+            except Exception as e:  # noqa: BLE001 - provider raises several error types
+                last = e
+        raise RuntimeError(f"All embedding keys failed: {last}")
 
     def __hash__(self) -> int:  # lru_cache on a method needs a hashable self
         return id(self)

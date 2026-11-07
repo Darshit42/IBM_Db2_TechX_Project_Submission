@@ -58,7 +58,14 @@ SYSTEM_SQL = """You are a senior data analyst who writes SQL for IBM Db2 12.1 (L
 Today is {today}. The data covers {date_range}.
 
 Rules:
-- Output ONE read-only query (SELECT or WITH ... SELECT). Never modify data.
+- Output ONE query. Normally a read-only SELECT / WITH ... SELECT.
+- If the user explicitly asks to change data or schema (delete, update, insert, drop ...), do NOT
+  substitute a different query: write the exact statement they asked for. A separate safety layer
+  decides whether it may run, and the user must see that decision.
+- For "highest / lowest / best / worst" questions return the top ~10 ranked rows (not just one), so
+  the answer has context.
+- When comparing entities that existed for different lengths of time (e.g. stores with different
+  OPENED_ON dates, customers with different SIGNUP_DATEs), normalise (per day / per month active).
 - Use Db2 syntax: FETCH FIRST n ROWS ONLY (never LIMIT), CURRENT DATE, YEAR()/MONTH()/QUARTER(),
   VARCHAR_FORMAT(d, 'YYYY-MM') for month buckets, DAYS(d) for day arithmetic, d - 1 MONTH, FIRST_DAY(d),
   LAG/LEAD/RANK() OVER (...), NULLIF for safe division, DECIMAL(x, p, s) for rounding.
@@ -73,8 +80,12 @@ Rules:
 """
 
 SYSTEM_SUMMARY = """You explain query results to business users. Be concise, specific and accurate:
-quote actual numbers from the rows (format large numbers readably, currency is INR, use the ₹ sign),
-point out the most notable pattern, and never invent data that is not in the rows."""
+quote actual numbers from the rows (currency is INR: write amounts with the ₹ sign in Indian units,
+e.g. ₹1.47 Cr or ₹8.2 L; round percentages to one decimal),
+point out the most notable pattern, and never invent data that is not in the rows.
+Today is {today}; the dataset covers {date_range}. Periods before today are actuals, not projections.
+If a compared period is only partly covered by the data, say so explicitly, because it distorts the
+comparison."""
 
 
 @dataclass
@@ -122,16 +133,34 @@ class Analyst:
     # -- LLM plumbing ---------------------------------------------------------
     @property
     def llm(self):
+        """Primary model; see ``_structured`` for the fallback chain actually used."""
         if self._llm is None and self.cfg.llm_enabled:
-            from langchain_google_genai import ChatGoogleGenerativeAI
+            self._llm = self._candidates()
+        return self._llm[0] if self._llm else None
 
-            self._llm = ChatGoogleGenerativeAI(
-                model=self.cfg.gemini_model,
-                google_api_key=self.cfg.google_api_key,
+    def _candidates(self) -> list:
+        """One chat model per (model, key), model-major: try every key on the best model first."""
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return [
+            ChatGoogleGenerativeAI(
+                model=model,
+                google_api_key=key,
                 temperature=0,
-                max_retries=2,
+                max_retries=1,  # fail over fast on 429/5xx instead of sleeping
+                # System instructions require v1beta on the Gemini Developer API.
+                api_version="v1beta",
             )
-        return self._llm
+            for model in self.cfg.models
+            for key in self.cfg.api_keys
+        ]
+
+    def _structured(self, schema):
+        """Structured-output runnable with LangChain fallbacks across keys and models."""
+        if self.llm is None:
+            raise RuntimeError("No Gemini API key configured")
+        primary, *rest = [m.with_structured_output(schema) for m in self._llm]
+        return primary.with_fallbacks(rest) if rest else primary
 
     def date_range(self) -> str:
         if self._date_range is None:
@@ -172,7 +201,7 @@ class Analyst:
         return msgs
 
     def _draft_sql(self, question, examples, history, feedback) -> SqlDraft:
-        chain = self.llm.with_structured_output(SqlDraft)
+        chain = self._structured(SqlDraft)
         return chain.invoke(self._sql_messages(question, examples, history, feedback))
 
     def _summarize(self, question: str, sql: str, cols: list[str], rows: list[list]) -> Insight:
@@ -180,9 +209,12 @@ class Analyst:
 
         preview = [dict(zip(cols, r)) for r in rows[:40]]
         body = (f"Question: {question}\n\nSQL:\n{sql}\n\n"
+                f"Data available: {self.date_range()}. Before answering, check every period the "
+                f"question compares against this range and mention any that are partly missing.\n\n"
                 f"Rows returned: {len(rows)} (showing up to 40)\n{json.dumps(preview, default=str)}")
-        chain = self.llm.with_structured_output(Insight)
-        return chain.invoke([SystemMessage(SYSTEM_SUMMARY), HumanMessage(body)])
+        chain = self._structured(Insight)
+        system = SYSTEM_SUMMARY.format(today=dt.date.today().isoformat(), date_range=self.date_range())
+        return chain.invoke([SystemMessage(system), HumanMessage(body)])
 
     # -- main entry -----------------------------------------------------------
     def ask(self, question: str, history: list[Turn] | None = None) -> AskResult:
@@ -192,8 +224,9 @@ class Analyst:
         history = history or []
         try:
             examples = self.memory.search(question)
-        except Db2Error as e:
+        except Exception as e:  # Db2 or embedding provider: answer without few-shot examples
             log.warning("memory search failed: %s", e)
+            res.notes.append("Vector memory unavailable for this question.")
             examples = []
         res.examples = [e.to_dict() for e in examples]
 
@@ -205,7 +238,12 @@ class Analyst:
         except Exception as e:  # never let the API 500 on a model/network hiccup
             log.exception("ask failed")
             res.status = "ERROR"
-            res.error = f"{type(e).__name__}: {e}"
+            msg = str(e)
+            if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
+                res.error = ("All configured Gemini keys/models are over their quota right now. "
+                             "Add another key to GOOGLE_API_KEYS or try again later.")
+            else:
+                res.error = f"{type(e).__name__}: {msg[:500]}"
         res.elapsed_ms = int((time.time() - t0) * 1000)
         res.audit_id = self._audit(res)
         return res
@@ -234,8 +272,10 @@ class Analyst:
             if ok:
                 res.chart = charts.validate(draft.chart.model_dump(), res.columns, res.rows)
                 break
-            if res.status == "BLOCKED" and res.attempts[-1].get("stage") == "cost":
-                break  # retrying an over-budget query rarely helps; tell the user instead
+            if res.status == "BLOCKED":
+                # A write request or an over-budget query should be reported, not "repaired"
+                # into something the user did not ask for.
+                break
             feedback.append((draft.sql, res.attempts[-1]["error"]))
         if res.status == "OK":
             try:
@@ -257,7 +297,8 @@ class Analyst:
             return False
         res.sql = checked.sql
         rec["sql"] = checked.sql
-        res.notes = [n for n in res.notes if n.startswith("Offline")] + checked.notes
+        guard_prefixes = ("Added row cap", "Reduced row limit", "Rewrote LIMIT")
+        res.notes = [n for n in res.notes if not n.startswith(guard_prefixes)] + checked.notes
         # 2) optimizer: validates the SQL and estimates cost
         try:
             plan: Plan = explain(self.db, checked.sql)

@@ -83,6 +83,7 @@ Other features:
 
 - **Framework:** **LangChain** (`langchain-google-genai`): `ChatGoogleGenerativeAI.with_structured_output()` with Pydantic schemas, plus `GoogleGenerativeAIEmbeddings`.
 - **Model provider and models:** Google **Gemini 2.5 Flash** writes the SQL and the summaries. **`gemini-embedding-001`** produces the 768-dimension question embeddings. Both are configurable in `.env`.
+- **Fallback handling:** if a key or model is rate-limited (429 / quota), LangChain `with_fallbacks` tries every configured key (`GOOGLE_API_KEYS`) on the primary model, then on `GEMINI_FALLBACK_MODELS` (default `gemini-2.5-flash-lite`). Embeddings fail over across keys in the same way. Failures in memory search or the summary step degrade gracefully and never break the answer.
 - **How Db2 context reaches the model:**
   - The prompt is built from the **Db2 catalog** (schema, comments and sample values) plus the **nearest verified examples** found by Db2 vector search.
   - When a query fails, Db2's **EXPLAIN or runtime error text** goes back into the conversation so the model can fix it.
@@ -138,6 +139,7 @@ python src/setup_db.py
 | `DB2_HOST`, `DB2_PORT`, `DB2_DATABASE`, `DB2_USER`, `DB2_PASSWORD` | Admin connection. `docker-compose.yml` reads the same values |
 | `DB2_RO_USER`, `DB2_RO_PASSWORD` | The least-privilege user that runs generated SQL |
 | `GOOGLE_API_KEY`, `GEMINI_MODEL`, `GEMINI_EMBED_MODEL`, `EMBED_DIM` | Gemini settings |
+| `GOOGLE_API_KEYS`, `GEMINI_FALLBACK_MODELS` | Optional extra keys and fallback models used on quota errors |
 | `MAX_QUERY_COST` | EXPLAIN cost budget in timerons. Queries estimated above it are blocked |
 | `MAX_ROWS`, `MAX_SQL_RETRIES`, `MEMORY_K` | Row cap, self-correction attempts, number of few-shot examples |
 
@@ -182,7 +184,9 @@ pytest tests -q
   - the stored procedure returns its OUT parameter;
   - the catalog prompt contains the comments and sample values.
 
-Current result: **53 passed**.
+- `test_config_fallbacks.py` checks key and model de-duplication and the order of the fallback chain.
+
+Current result: **58 passed**.
 
 To check the Db2 side by hand:
 

@@ -24,6 +24,7 @@ CREATE TABLE {DATA}.STORES (
 )@
 COMMENT ON TABLE {DATA}.STORES IS 'Physical stores and the online web store (CHANNEL = ONLINE).'@
 COMMENT ON COLUMN {DATA}.STORES.CHANNEL IS 'STORE for physical shops, ONLINE for e-commerce.'@
+COMMENT ON COLUMN {DATA}.STORES.OPENED_ON IS 'Opening date. Stores opened after the data start have fewer trading days: compare revenue per trading day.'@
 
 CREATE TABLE {DATA}.CUSTOMERS (
     CUSTOMER_ID  INTEGER      NOT NULL PRIMARY KEY,
