@@ -2,7 +2,7 @@
 
 > **One-line pitch:** Ask your Db2 data a question in plain English and get back a chart, a short written answer and the exact SQL that produced them. Before running anything, it checks the SQL with Db2's own optimizer and runs it as a read-only Db2 user. When you approve an answer, it is stored as a Db2 `VECTOR` embedding and reused for similar questions.
 
-![Answer card with chart and Db2 trace](docs/screenshots/01-answer.png)
+![Answer card with chart and Db2 trace](docs/screenshots/01-answer.jpg)
 
 ---
 
@@ -206,9 +206,9 @@ SELECT TABNAME, SELECTAUTH, INSERTAUTH, DELETEAUTH FROM SYSCAT.TABAUTH WHERE GRA
 
 | | |
 |---|---|
-| ![Answer](docs/screenshots/01-answer.png) | ![Trace](docs/screenshots/02-trace.png) |
+| ![Answer](docs/screenshots/01-answer.jpg) | ![Trace](docs/screenshots/02-trace.jpg) |
 | Chart, answer and follow-up suggestions | EXPLAIN plan, vector-memory hits, self-correction log |
-| ![Blocked](docs/screenshots/03-blocked.png) | ![Memory](docs/screenshots/04-memory.png) |
+| ![Blocked](docs/screenshots/03-blocked.jpg) | ![Memory](docs/screenshots/04-memory.jpg) |
 | A write attempt blocked by the guardrails | Vector memory and history read from Db2 |
 
 ## Known Limitations & Future Roadmap
