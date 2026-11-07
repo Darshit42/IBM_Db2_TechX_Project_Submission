@@ -159,6 +159,24 @@ class Db2:
         _, rows, _ = self.query(sql, params, max_rows=1)
         return rows[0][0] if rows else None
 
+    def callproc(self, name: str, params: Sequence[Any]) -> tuple:
+        """CALL a stored procedure; returns the parameter tuple with OUT values filled in."""
+        conn = self._conn(False)
+        try:
+            res = ibm_db.callproc(conn, name, tuple(params))
+        except Exception as e:
+            raise Db2Error(str(e)) from e
+        if res is None or res is False:
+            raise _err(conn)
+        if isinstance(res, tuple):
+            stmt, *values = res
+            try:
+                ibm_db.free_stmt(stmt)
+            except Exception:
+                pass
+            return tuple(values)
+        return ()
+
     @contextmanager
     def transaction(self) -> Iterator[None]:
         conn = self._conn(False)

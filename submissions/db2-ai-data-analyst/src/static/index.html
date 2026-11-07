@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Db2 AI Data Analyst</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">Db2</div>
+      <div>
+        <div class="brand-title">AI Data Analyst</div>
+        <div class="brand-sub" id="status-line">connecting…</div>
+      </div>
+    </div>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="examples">Try</button>
+      <button class="tab" data-tab="history">History</button>
+      <button class="tab" data-tab="memory">Memory</button>
+      <button class="tab" data-tab="schema">Schema</button>
+    </nav>
+
+    <section class="panel active" id="panel-examples">
+      <p class="hint">Ask anything about the retail data. Some ideas:</p>
+      <ul class="examples" id="examples"></ul>
+    </section>
+    <section class="panel" id="panel-history"><ul class="list" id="history"></ul></section>
+    <section class="panel" id="panel-memory">
+      <p class="hint">Verified question → SQL pairs stored as <code>VECTOR</code> embeddings in Db2. Similar questions retrieve them with <code>VECTOR_DISTANCE</code>.</p>
+      <ul class="list" id="memory"></ul>
+    </section>
+    <section class="panel" id="panel-schema"><div id="schema"></div></section>
+
+    <div class="stats" id="stats"></div>
+  </aside>
+
+  <main class="main">
+    <div class="thread" id="thread">
+      <div class="welcome" id="welcome">
+        <h1>Ask your Db2 data a question</h1>
+        <p>Plain English in. Validated, cost-checked Db2 SQL, a chart and an answer out — with every step visible.</p>
+        <div class="pipeline">
+          <span>Vector memory</span><i>→</i><span>Gemini SQL</span><i>→</i><span>Guardrails</span><i>→</i>
+          <span>Db2 EXPLAIN</span><i>→</i><span>Read-only run</span><i>→</i><span>Insight</span><i>→</i><span>Audit</span>
+        </div>
+      </div>
+    </div>
+
+    <form class="composer" id="composer">
+      <textarea id="question" rows="1" placeholder="e.g. Which subcategory had the highest return rate in 2026?" maxlength="1000"></textarea>
+      <label class="followup-toggle" title="Send previous questions as context for follow-ups">
+        <input type="checkbox" id="use-context" checked> follow-up context
+      </label>
+      <button type="submit" id="send">Ask</button>
+    </form>
+  </main>
+</div>
+
+<template id="card-tpl">
+  <article class="card">
+    <header class="card-q"></header>
+    <div class="card-body">
+      <div class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> <em>thinking…</em></div>
+    </div>
+  </article>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
