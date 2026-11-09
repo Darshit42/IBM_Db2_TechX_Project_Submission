@@ -2,11 +2,11 @@
 
 > **One-line pitch:** the AI analyst that Db2 fact-checks. Ask a question in plain English and get a chart, a short answer and the exact SQL. Db2 validates and cost-checks the SQL before it runs, **proves the totals are not inflated by a bad join**, and for *why* questions pulls in **what customers are saying on Reddit, X and review sites** with one hybrid vector + relational query.
 
-**The wrong-number problem.** Generated SQL can run without an error and still be wrong. Asked for *"total shipping fees by product category"*, a model typically joins `ORDERS` to `ORDER_ITEMS` and sums `SHIPPING_FEE`, which counts each order's fee once per order line. On this dataset the query returns **₹10.99 L instead of ₹5.55 L (1.98× inflated)**. This app runs two Db2 control queries over the same joins and catches the mismatch. If the model wrote the query, Db2's evidence goes back to it and only the corrected result is shown. The same check works on **any existing report or dashboard query**: paste it into the *Verify* tab and Db2 proves whether its totals are right.
+**The wrong-number problem.** Generated SQL can run without an error and still be wrong. Asked for *"total shipping fees by product category"*, a model typically joins `ORDERS` to `ORDER_ITEMS` and sums `SHIPPING_FEE`, which counts each order's fee once per order line. On this dataset (completed orders) the query returns **₹10.11 L instead of ₹5.13 L (1.97× inflated)**. This app runs two Db2 control queries over the same joins and catches the mismatch. If the model wrote the query, Db2's evidence goes back to it and only the corrected result is shown. The same check works on **any existing report or dashboard query**: paste it into the *Verify* tab and Db2 proves whether its totals are right.
 
 **The why problem.** SQL tells you *what* happened ("smartwatch returns jumped to 38% in Mar–Jul 2026"). The customer posts stored next to the sales data in Db2 tell you *why* ("strap snapped after two weeks"), lined up month by month.
 
-![Answer card with chart and Db2 trace](docs/screenshots/01-answer.jpg)
+![Why question answered with return-rate SQL plus matching customer posts](docs/screenshots/05-why-social.jpg)
 
 ---
 
@@ -62,7 +62,8 @@ For a query such as
 ```sql
 SELECT p.CATEGORY, SUM(o.SHIPPING_FEE) AS FEES
 FROM RETAIL.ORDERS o JOIN RETAIL.ORDER_ITEMS i ON i.ORDER_ID = o.ORDER_ID
-JOIN RETAIL.PRODUCTS p ON p.PRODUCT_ID = i.PRODUCT_ID GROUP BY p.CATEGORY
+JOIN RETAIL.PRODUCTS p ON p.PRODUCT_ID = i.PRODUCT_ID
+WHERE o.STATUS = 'COMPLETED' GROUP BY p.CATEGORY
 ```
 
 `grain.py` parses the SQL (sqlglot), sees that `SHIPPING_FEE` belongs to `ORDERS` (primary key `ORDER_ID`), and runs two control queries in Db2 as the read-only user, over exactly the same `FROM` / `JOIN` / `WHERE`:
@@ -73,7 +74,7 @@ SELECT COUNT(*) AS SOURCE_ROWS, SUM(ZZG.ZZV) AS EXACT_VALUE
 FROM (SELECT DISTINCT o.ORDER_ID AS ZZK0, o.SHIPPING_FEE AS ZZV FROM <same joins and filters>) AS ZZG;
 ```
 
-Db2 answers 51,445 source orders, 101,979 joined rows, ₹10.99 L naive against ₹5.55 L exact. The check fails, the agent tells the model what Db2 found, the model aggregates `ORDERS` in a CTE before joining, and the answer card says *"Db2 caught a wrong number … 1.98× inflated. The query was rewritten and re-verified."* Gemini 2.5 often avoids this trap by pre-aggregating in a CTE, in which case the check reports *skipped* instead of claiming a verification it did not do. To audit queries written by people or BI tools, the **Verify** tab (`POST /api/verify`) runs any pasted `SELECT` through the guardrails, EXPLAIN, a read-only run and the grain check, and audits it like a question. Correct joins (for example `V_SALES` joined to `PRODUCTS`) pass and get a *"Totals verified by Db2"* badge. `COUNT(*)`, `COUNT(DISTINCT …)` and CTE-based queries are grain-safe or skipped rather than guessed. Every catch is stored in the audit row and counted with `JSON_EXISTS(DETAILS, '$.grain_caught[0]')`.
+Db2 answers 47,793 source orders, 94,365 joined rows, ₹10.11 L naive against ₹5.13 L exact. The check fails, the agent tells the model what Db2 found, the model aggregates `ORDERS` in a CTE before joining, and the answer card says *"Db2 caught a wrong number … 1.97× inflated. The query was rewritten and re-verified."* Gemini 2.5 often avoids this trap by pre-aggregating in a CTE, in which case the check reports *skipped* instead of claiming a verification it did not do. To audit queries written by people or BI tools, the **Verify** tab (`POST /api/verify`) runs any pasted `SELECT` through the guardrails, EXPLAIN, a read-only run and the grain check, and audits it like a question. Correct joins (for example `V_SALES` joined to `PRODUCTS`) pass and get a *"Totals verified by Db2"* badge. `COUNT(*)`, `COUNT(DISTINCT …)` and CTE-based queries are grain-safe or skipped rather than guessed. Every catch is stored in the audit row and counted with `JSON_EXISTS(DETAILS, '$.grain_caught[0]')`.
 
 ### Voice of the customer: social posts in Db2
 
@@ -216,7 +217,7 @@ Try these:
 
 - *Why did smartwatch returns spike in 2026?* (return-rate SQL plus the matching Reddit / X / review posts and their timeline)
 - *Total shipping fees collected by product category*: if the model joins before summing, watch Db2 catch the double-counted fees
-- **Verify tab** → *Verify with Db2* on the preloaded dashboard query: ₹10.99 L reported vs ₹5.55 L exact
+- **Verify tab** → *Verify with Db2* on the preloaded dashboard query: ₹10.11 L reported vs ₹5.13 L exact
 - *What are customers complaining about during the festive season?*
 - *Show monthly revenue and gross profit trend*
 - *Which subcategory had the highest return rate in 2026?* (should surface the smartwatch return spike)
@@ -282,6 +283,8 @@ SELECT TABNAME, SELECTAUTH, INSERTAUTH, DELETEAUTH FROM SYSCAT.TABAUTH WHERE GRA
 | Chart, answer and follow-up suggestions | EXPLAIN plan, vector-memory hits, self-correction log |
 | ![Blocked](docs/screenshots/03-blocked.jpg) | ![Memory](docs/screenshots/04-memory.jpg) |
 | A write attempt blocked by the guardrails | Vector memory and history read from Db2 |
+| ![Why + social](docs/screenshots/05-why-social.jpg) | ![Verify](docs/screenshots/06-verify-caught.jpg) |
+| *Why did smartwatch returns spike?* Return rate plus the Reddit / X / review posts and their monthly timeline | Verify tab: Db2 proves a dashboard query double-counts shipping fees (1.97×) |
 
 ## Known Limitations & Future Roadmap
 
