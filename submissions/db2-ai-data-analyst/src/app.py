@@ -21,7 +21,7 @@ from analyst.agent import Analyst, Turn  # noqa: E402
 from analyst.config import settings  # noqa: E402
 from analyst.db import Db2Error, db  # noqa: E402
 from analyst.explain import explain  # noqa: E402
-from analyst.social import SocialEvidence, SocialFilter  # noqa: E402
+from analyst.social import SocialFilter  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 STATIC = Path(__file__).resolve().parent / "static"
@@ -152,8 +152,7 @@ def social_search(q: str, date_from: str | None = None, date_to: str | None = No
     f = SocialFilter(query=q[:300], date_from=date_from, date_to=date_to, category=category,
                      brand=brand, platform=platform)
     try:
-        store = analyst().social
-        return SocialEvidence(f, posts=store.search(f, k=10), timeline=store.timeline(f)).to_dict()
+        return analyst().social.evidence(f, k=10).to_dict()
     except (Db2Error, ValueError) as e:
         raise HTTPException(400, str(e))
 

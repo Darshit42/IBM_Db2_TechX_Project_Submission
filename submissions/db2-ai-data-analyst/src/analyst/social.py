@@ -210,8 +210,26 @@ class SocialStore:
             sql += " WHERE " + " AND ".join(where)
         return sql, params
 
-    def search(self, f: SocialFilter, k: int = 6, max_distance: float = 0.45) -> list[dict]:
-        """Top-k posts by cosine distance, restricted by relational filters - one Db2 statement."""
+    # Embedding distances are relative: a post "matches" when it is about as close to the query
+    # as the best hit (within MATCH_MARGIN), and never further than MAX_DISTANCE.
+    MATCH_MARGIN = 0.08
+    MAX_DISTANCE = 0.42
+
+    def cutoff(self, f: SocialFilter) -> float | None:
+        """Distance threshold for ``f``: best hit + margin (one Db2 MIN(VECTOR_DISTANCE) query)."""
+        vec = to_vector_literal(self.embedder.embed(f.query))
+        frm, params = self._base(f)
+        best = self.db.query(f"SELECT MIN(VECTOR_DISTANCE(e.EMBEDDING, {self._vec()}, COSINE)) {frm}",
+                             [vec] + params)[1][0][0]
+        if best is None or float(best) > self.MAX_DISTANCE:
+            return None
+        return min(float(best) + self.MATCH_MARGIN, self.MAX_DISTANCE)
+
+    def search(self, f: SocialFilter, k: int = 6, max_distance: float | None = None) -> list[dict]:
+        """Top-k distinct posts by cosine distance, restricted by relational filters - one Db2 statement."""
+        max_distance = self.cutoff(f) if max_distance is None else max_distance
+        if max_distance is None:
+            return []
         vec = to_vector_literal(self.embedder.embed(f.query))
         frm, params = self._base(f)
         rows = self.db.query_dicts(
@@ -222,17 +240,29 @@ class SocialStore:
                    VECTOR_DISTANCE(e.EMBEDDING, {self._vec()}, COSINE) AS DIST
             {frm}
             ORDER BY DIST
-            FETCH FIRST {int(k) * 3} ROWS ONLY
+            FETCH FIRST {int(k) * 40} ROWS ONLY
             """,
             [vec] + params,
         )
-        out = [r for r in rows if r["DIST"] is not None and float(r["DIST"]) <= max_distance]
-        # Prefer engaged posts among near-equal matches, keep the order otherwise.
-        out.sort(key=lambda r: (round(float(r["DIST"]), 2), -int(r["ENGAGEMENT"] or 0)))
-        return [_post_dict(r) for r in out[:k]]
+        cand = [r for r in rows if r["DIST"] is not None and float(r["DIST"]) <= max_distance]
+        # Among near-equal matches prefer engaged posts; show each wording once.
+        cand.sort(key=lambda r: (round(float(r["DIST"]), 2), -int(r["ENGAGEMENT"] or 0)))
+        out, seen = [], set()
+        for r in cand:
+            key = re.sub(r"\W+", " ", r["POST_TEXT"].lower())[:60]
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(_post_dict(r))
+            if len(out) == k:
+                break
+        return out
 
-    def timeline(self, f: SocialFilter, max_distance: float = 0.45) -> list[dict]:
+    def timeline(self, f: SocialFilter, max_distance: float | None = None) -> list[dict]:
         """Monthly volume and sentiment of posts semantically matching the query."""
+        max_distance = self.cutoff(f) if max_distance is None else max_distance
+        if max_distance is None:
+            return []
         vec = to_vector_literal(self.embedder.embed(f.query))
         frm, params = self._base(f)
         cond = f"VECTOR_DISTANCE(e.EMBEDDING, {self._vec()}, COSINE) <= {float(max_distance)}"
@@ -250,6 +280,12 @@ class SocialStore:
         return [{"month": r["MONTH"], "mentions": int(r["MENTIONS"]),
                  "avg_sentiment": float(r["AVG_SENTIMENT"]) if r["AVG_SENTIMENT"] is not None else None}
                 for r in rows]
+
+    def evidence(self, f: SocialFilter, k: int = 6) -> "SocialEvidence":
+        cut = self.cutoff(f)
+        if cut is None:
+            return SocialEvidence(f)
+        return SocialEvidence(f, posts=self.search(f, k, cut), timeline=self.timeline(f, cut))
 
     def stats(self) -> dict:
         try:

@@ -33,7 +33,7 @@ from .embeddings import Embedder
 from .explain import Plan, explain
 from .grain import GrainChecker, GrainReport
 from .memory import Example, QueryMemory
-from .social import SocialEvidence, SocialFilter, SocialStore
+from .social import SocialFilter, SocialStore
 
 log = logging.getLogger("analyst")
 
@@ -361,12 +361,12 @@ class Analyst:
         f = SocialFilter(query=s.query, date_from=s.date_from, date_to=s.date_to, category=s.category,
                          subcategory=s.subcategory, brand=s.brand, platform=s.platform)
         try:
-            ev = SocialEvidence(f, posts=self.social.search(f), timeline=self.social.timeline(f))
+            ev = self.social.evidence(f)
         except Exception as e:  # bad model-provided date, embedding quota, ...
             log.warning("social search failed: %s", e)
             try:  # retry without the model's filters, the usual culprit
                 f = SocialFilter(query=s.query)
-                ev = SocialEvidence(f, posts=self.social.search(f), timeline=self.social.timeline(f))
+                ev = self.social.evidence(f)
             except Exception as e2:  # noqa: BLE001
                 log.warning("social search failed again: %s", e2)
                 return None

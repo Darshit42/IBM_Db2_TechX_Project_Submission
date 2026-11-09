@@ -21,6 +21,7 @@ from .seed_data import END, START
 from .social import Post
 
 SEED = 4242
+MATHURA_OPENED = dt.date(2025, 6, 15)
 
 SUBREDDITS = {
     "Electronics": ["r/IndianGaming", "r/gadgets_india", "r/smartwatch", "r/india"],
@@ -200,6 +201,11 @@ def generate(products: list[dict], stores: list[dict], seed: int = SEED) -> list
     for _ in range(420):
         cat = rnd.choice(list(by_cat))
         add(PRAISE if rnd.random() < 0.7 else SERVICE, _rand_date(rnd, START, END), rnd.choice(by_cat[cat]))
+
+    # Generic templates pick a random city; no post may mention a store before it opened.
+    for p in posts:
+        if p.store_id is None and p.posted_at.date() < MATHURA_OPENED and "Mathura" in p.text:
+            p.text = p.text.replace("Mathura", "Lucknow")
 
     posts.sort(key=lambda p: p.posted_at)
     for i, p in enumerate(posts, start=1):  # stable ids in time order
