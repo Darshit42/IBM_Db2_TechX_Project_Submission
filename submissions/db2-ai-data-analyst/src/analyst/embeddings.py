@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import time
 from functools import lru_cache
 
 from .config import Settings, settings
@@ -45,6 +46,39 @@ class Embedder:
             except Exception as e:  # noqa: BLE001 - provider raises several error types
                 last = e
         raise RuntimeError(f"All embedding keys failed: {last}")
+
+    def embed_many(self, texts: list[str], batch: int = 90, progress=None) -> list[list[float]]:
+        """Batch embedding for bulk ingestion.
+
+        The free tier counts every text against a per-minute, per-key quota, so batches are
+        spread round-robin over the configured keys and a 429 waits for the window to reset.
+        """
+        if not self._clients:
+            return [hash_embed(t, self.dim) for t in texts]
+        out: list[list[float]] = []
+        turn = 0
+        for i in range(0, len(texts), batch):
+            chunk = texts[i:i + batch]
+            last: Exception | None = None
+            for attempt in range(len(self._clients) * 6):
+                client = self._clients[turn % len(self._clients)]
+                turn += 1
+                try:
+                    vecs = client.embed_documents(chunk, output_dimensionality=self.dim)
+                    out.extend(_normalize(list(v)[: self.dim]) for v in vecs)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last = e
+                    quota = "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e)
+                    if not quota:
+                        continue
+                    if (attempt + 1) % len(self._clients) == 0:  # every key is rate limited
+                        time.sleep(20)
+            else:
+                raise RuntimeError(f"All embedding keys failed: {last}")
+            if progress:
+                progress(len(out), len(texts))
+        return out
 
     def __hash__(self) -> int:  # lru_cache on a method needs a hashable self
         return id(self)

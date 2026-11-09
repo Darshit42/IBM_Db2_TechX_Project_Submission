@@ -3,6 +3,10 @@
     python src/setup_db.py            # create schema, load data, stats, memory
     python src/setup_db.py --reset    # drop and recreate everything
     python src/setup_db.py --memory   # only (re)build the vector memory
+    python src/setup_db.py --social   # (re)load the seeded social posts + embeddings
+
+Running it again on an existing database upgrades it in place: missing objects are
+created, social posts are loaded if absent, grants and memory are refreshed.
 """
 from __future__ import annotations
 
@@ -19,10 +23,11 @@ from analyst.db import Db2, Db2Error  # noqa: E402
 from analyst.embeddings import Embedder  # noqa: E402
 from analyst.explain import ensure_explain_tables  # noqa: E402
 from analyst.memory import SEED_EXAMPLES, QueryMemory  # noqa: E402
-from analyst import seed_data  # noqa: E402
+from analyst import seed_data, seed_social  # noqa: E402
+from analyst.social import SocialStore  # noqa: E402
 
 SQL_DIR = Path(__file__).resolve().parent / "analyst" / "sql"
-DATA_TABLES = ["ORDER_ITEMS", "ORDERS", "PRODUCTS", "CUSTOMERS", "STORES", "REGIONS"]
+DATA_TABLES = ["SOCIAL_POSTS", "ORDER_ITEMS", "ORDERS", "PRODUCTS", "CUSTOMERS", "STORES", "REGIONS"]
 
 
 def step(msg: str) -> None:
@@ -84,7 +89,7 @@ def create_schema(db: Db2) -> None:
         try:
             db.execute(stmt)
         except Db2Error as e:
-            if e.sqlstate in ("42710",):  # object already exists
+            if e.sqlstate in ("42710", "01550"):  # object / matching index already exists
                 continue
             print(f"    failed statement:\n{stmt[:300]}")
             raise
@@ -118,6 +123,36 @@ def runstats(db: Db2) -> None:
             f"WITH DISTRIBUTION AND DETAILED INDEXES ALL')"
         )
     print("    statistics collected for the optimizer")
+
+
+def load_social(db: Db2, replace: bool = False) -> None:
+    store = SocialStore(db, Embedder())
+    if replace:
+        db.execute(f"DELETE FROM {settings.data_schema}.SOCIAL_POSTS WHERE EXTERNAL_ID LIKE 'seed-%'")
+    elif db.scalar(f"SELECT COUNT(*) FROM {settings.data_schema}.SOCIAL_POSTS"):
+        print("    social posts already loaded (use --social to reload)")
+        return
+    products = db.query_dicts(
+        f"SELECT PRODUCT_ID, PRODUCT_NAME, CATEGORY, SUBCATEGORY, BRAND FROM {settings.data_schema}.PRODUCTS")
+    stores = db.query_dicts(f"SELECT STORE_ID, CITY, CHANNEL FROM {settings.data_schema}.STORES")
+    posts = seed_social.generate(products, stores)
+    t0 = time.time()
+    n = store.ingest(posts, enrich=False)
+    print(f"    SOCIAL_POSTS {n:>8,} rows + VECTOR({settings.embed_dim}) embeddings via "
+          f"{store.embedder.provider} ({time.time() - t0:.1f}s)")
+    db.execute(f"CALL SYSPROC.ADMIN_CMD('RUNSTATS ON TABLE {settings.data_schema}.SOCIAL_POSTS "
+               f"WITH DISTRIBUTION AND DETAILED INDEXES ALL')")
+
+
+def upgrade(db: Db2, container: str) -> None:
+    """Bring an existing install up to date without reloading the sales data."""
+    step("Upgrading schema in place (new tables, views)")
+    create_schema(db)
+    step("Social posts")
+    load_social(db)
+    step("Least-privilege query user grants")
+    if settings.db2_ro_user and create_ro_user(container):
+        grant_read_only(db)
 
 
 def create_ro_user(container: str) -> bool:
@@ -160,6 +195,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--reset", action="store_true", help="drop and recreate all objects")
     ap.add_argument("--memory", action="store_true", help="only rebuild the vector memory")
+    ap.add_argument("--social", action="store_true", help="reload the seeded social posts")
     ap.add_argument("--container", default="db2-analyst", help="Docker container for the read-only user")
     args = ap.parse_args()
 
@@ -173,11 +209,18 @@ def main() -> None:
         build_memory(db)
         return
 
+    if args.social:
+        step("Reloading social posts")
+        load_social(db, replace=True)
+        return
+
     exists = db.scalar(
         "SELECT COUNT(*) FROM SYSCAT.TABLES WHERE TABSCHEMA = ? AND TABNAME = 'ORDERS'", [settings.data_schema]
     )
     if exists and not args.reset:
-        print(f"    {settings.data_schema}.ORDERS already exists - use --reset to rebuild. Refreshing memory only.")
+        print(f"    {settings.data_schema}.ORDERS already exists - upgrading in place (--reset rebuilds).")
+        upgrade(db, args.container)
+        step("Refreshing semantic query memory")
         build_memory(db)
         return
     if args.reset:
@@ -190,6 +233,8 @@ def main() -> None:
     load_data(db)
     step("RUNSTATS")
     runstats(db)
+    step("Loading social posts (voice of the customer)")
+    load_social(db)
     step("Creating EXPLAIN tables")
     print("    created" if ensure_explain_tables(db) else "    already present")
     step("Least-privilege query user")

@@ -158,8 +158,8 @@ def plan_controls(sql: str, columns_of: dict[str, list[str]], keys_of: dict[str,
             return [], "joins a derived table"
         name = node.name.upper()
         schema = (node.db or default_schema).upper()
-        sources.append(_Source((node.alias or "").upper() or name, schema, name))
-    by_alias = {s.alias: s for s in sources}
+        sources.append(_Source(node.alias or name, schema, name))
+    by_alias = {s.alias.upper(): s for s in sources}
 
     controls: list[ControlQueries] = []
     seen: set[str] = set()
@@ -194,19 +194,13 @@ def _grain_source(arg, sources, by_alias, columns_of) -> _Source | None:
                 return None
             found.add(q)
         else:
-            owners = [s.alias for s in sources if col.name.upper() in columns_of.get(s.table, [])]
+            owners = [s.alias.upper() for s in sources if col.name.upper() in columns_of.get(s.table, [])]
             if len(owners) != 1:
                 return None
             found.add(owners[0])
     if len(found) != 1:
         return None
     return by_alias[found.pop()]
-
-
-def _qualifier(src: _Source) -> exp.Expression:
-    if src.alias != src.table:
-        return exp.to_identifier(src.alias)
-    return exp.to_identifier(src.table)
 
 
 def _build(tree: exp.Select, agg, arg, src: _Source, keys: list[str], subs) -> ControlQueries:
@@ -222,7 +216,7 @@ def _build(tree: exp.Select, agg, arg, src: _Source, keys: list[str], subs) -> C
     ])
 
     inner = base.copy()
-    if src.alias != src.table:
+    if src.alias.upper() != src.table:
         key_cols = [exp.column(k, table=src.alias) for k in keys]
     else:
         key_cols = [exp.Column(this=exp.to_identifier(k), table=exp.to_identifier(src.table),

@@ -21,6 +21,7 @@ from analyst.agent import Analyst, Turn  # noqa: E402
 from analyst.config import settings  # noqa: E402
 from analyst.db import Db2Error, db  # noqa: E402
 from analyst.explain import explain  # noqa: E402
+from analyst.social import SocialEvidence, SocialFilter  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 STATIC = Path(__file__).resolve().parent / "static"
@@ -135,7 +136,26 @@ def stats():
             FROM {s}.QUERY_AUDIT"""
     )[0]
     daily = db.query_dicts(f"SELECT * FROM {s}.V_AUDIT_DAILY ORDER BY DAY DESC FETCH FIRST 14 ROWS ONLY")
-    return {"totals": totals, "daily": daily, "memory_size": analyst().memory.count()}
+    try:  # SQL/JSON over the audit CLOB: how often Db2 caught an inflated total
+        totals["GRAIN_CAUGHT"] = db.scalar(
+            f"SELECT COUNT(*) FROM {s}.QUERY_AUDIT WHERE JSON_EXISTS(DETAILS, '$.grain_caught[0]')")
+    except Db2Error:
+        totals["GRAIN_CAUGHT"] = None
+    return {"totals": totals, "daily": daily, "memory_size": analyst().memory.count(),
+            "social": analyst().social.stats()}
+
+
+@app.get("/api/social/search")
+def social_search(q: str, date_from: str | None = None, date_to: str | None = None,
+                  category: str | None = None, brand: str | None = None, platform: str | None = None):
+    """Hybrid search: Db2 VECTOR_DISTANCE ranking + relational filters, plus a monthly timeline."""
+    f = SocialFilter(query=q[:300], date_from=date_from, date_to=date_to, category=category,
+                     brand=brand, platform=platform)
+    try:
+        store = analyst().social
+        return SocialEvidence(f, posts=store.search(f, k=10), timeline=store.timeline(f)).to_dict()
+    except (Db2Error, ValueError) as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/")

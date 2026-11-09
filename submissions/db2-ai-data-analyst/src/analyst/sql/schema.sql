@@ -80,8 +80,8 @@ CREATE INDEX {DATA}.IX_ITEMS_PRODUCT   ON {DATA}.ORDER_ITEMS (PRODUCT_ID)@
 CREATE INDEX {DATA}.IX_PRODUCTS_CAT    ON {DATA}.PRODUCTS (CATEGORY, SUBCATEGORY)@
 
 -- Convenience view the LLM can use for most revenue questions.
-CREATE VIEW {DATA}.V_SALES AS
-SELECT o.ORDER_ID, o.ORDER_DATE, o.STATUS, o.CUSTOMER_ID, o.STORE_ID,
+CREATE OR REPLACE VIEW {DATA}.V_SALES AS
+SELECT o.ORDER_ID, i.LINE_NO, o.ORDER_DATE, o.STATUS, o.CUSTOMER_ID, o.STORE_ID,
        s.CHANNEL, r.REGION_NAME, p.PRODUCT_ID, p.CATEGORY, p.SUBCATEGORY, p.BRAND,
        i.QUANTITY,
        -- (100 - pct) / 100 keeps Db2 decimal precision bounded (pct / 100 alone overflows on SUM).
@@ -92,7 +92,40 @@ JOIN {DATA}.ORDER_ITEMS i ON i.ORDER_ID = o.ORDER_ID
 JOIN {DATA}.PRODUCTS p    ON p.PRODUCT_ID = i.PRODUCT_ID
 JOIN {DATA}.STORES s      ON s.STORE_ID = o.STORE_ID
 JOIN {DATA}.REGIONS r     ON r.REGION_ID = s.REGION_ID@
-COMMENT ON TABLE {DATA}.V_SALES IS 'One row per order line with net revenue and gross profit already computed. Prefer this view for sales questions; filter STATUS = ''COMPLETED'' for revenue.'@
+COMMENT ON TABLE {DATA}.V_SALES IS 'One row per order line (grain: ORDER_ID, LINE_NO) with net revenue and gross profit already computed. Prefer this view for sales questions; filter STATUS = ''COMPLETED'' for revenue.'@
+
+-- ---------------------------------------------------------------------
+-- Voice of the customer: social media / review posts about our products
+-- and stores. Embeddings live in {APP}.SOCIAL_EMBEDDINGS (not visible to the
+-- query user); semantic search joins the two in a single Db2 statement.
+-- ---------------------------------------------------------------------
+CREATE TABLE {DATA}.SOCIAL_POSTS (
+    POST_ID      INTEGER       NOT NULL PRIMARY KEY,
+    EXTERNAL_ID  VARCHAR(80)   NOT NULL UNIQUE,
+    PLATFORM     VARCHAR(10)   NOT NULL CHECK (PLATFORM IN ('REDDIT','X','REVIEW','OTHER')),
+    CHANNEL      VARCHAR(80)   NOT NULL,
+    AUTHOR       VARCHAR(80)   NOT NULL,
+    POSTED_AT    TIMESTAMP     NOT NULL,
+    POST_DATE    DATE          NOT NULL,
+    PRODUCT_ID   INTEGER       REFERENCES {DATA}.PRODUCTS(PRODUCT_ID),
+    STORE_ID     INTEGER       REFERENCES {DATA}.STORES(STORE_ID),
+    BRAND        VARCHAR(40),
+    TOPIC        VARCHAR(20)   NOT NULL,
+    SENTIMENT    DECIMAL(4,3)  NOT NULL CHECK (SENTIMENT BETWEEN -1 AND 1),
+    ENGAGEMENT   INTEGER       NOT NULL DEFAULT 0,
+    POST_TEXT    VARCHAR(1000) NOT NULL,
+    URL          VARCHAR(300)
+)@
+COMMENT ON TABLE {DATA}.SOCIAL_POSTS IS 'Customer posts from Reddit, X and review sites mentioning our products, brands or stores. One row per post.'@
+COMMENT ON COLUMN {DATA}.SOCIAL_POSTS.PLATFORM IS 'REDDIT, X, REVIEW (product review sites) or OTHER.'@
+COMMENT ON COLUMN {DATA}.SOCIAL_POSTS.CHANNEL IS 'Subreddit (r/...), X handle or review site the post came from.'@
+COMMENT ON COLUMN {DATA}.SOCIAL_POSTS.PRODUCT_ID IS 'Product the post is about, when it names one (nullable).'@
+COMMENT ON COLUMN {DATA}.SOCIAL_POSTS.STORE_ID IS 'Store the post is about, when it names one (nullable).'@
+COMMENT ON COLUMN {DATA}.SOCIAL_POSTS.TOPIC IS 'QUALITY, DELIVERY, PRICE, SERVICE, STORE, SIZING, APP or PRAISE.'@
+COMMENT ON COLUMN {DATA}.SOCIAL_POSTS.SENTIMENT IS 'Sentiment score from -1 (very negative) to +1 (very positive).'@
+COMMENT ON COLUMN {DATA}.SOCIAL_POSTS.ENGAGEMENT IS 'Likes + replies/upvotes at collection time.'@
+CREATE INDEX {DATA}.IX_SOCIAL_DATE    ON {DATA}.SOCIAL_POSTS (POST_DATE, PLATFORM)@
+CREATE INDEX {DATA}.IX_SOCIAL_PRODUCT ON {DATA}.SOCIAL_POSTS (PRODUCT_ID)@
 
 -- ---------------------------------------------------------------------
 -- Application schema: semantic query memory + audit trail
@@ -107,6 +140,12 @@ CREATE TABLE {APP}.QUERY_MEMORY (
     CREATED_AT   TIMESTAMP     NOT NULL DEFAULT CURRENT TIMESTAMP
 )@
 COMMENT ON TABLE {APP}.QUERY_MEMORY IS 'Verified question -> SQL pairs with Gemini embeddings, retrieved by VECTOR_DISTANCE as few-shot examples.'@
+
+CREATE TABLE {APP}.SOCIAL_EMBEDDINGS (
+    POST_ID      INTEGER       NOT NULL PRIMARY KEY REFERENCES {DATA}.SOCIAL_POSTS(POST_ID) ON DELETE CASCADE,
+    EMBEDDING    VECTOR({DIM}, FLOAT32) NOT NULL
+)@
+COMMENT ON TABLE {APP}.SOCIAL_EMBEDDINGS IS 'Gemini embeddings of SOCIAL_POSTS.POST_TEXT for semantic (VECTOR_DISTANCE) search.'@
 
 CREATE TABLE {APP}.QUERY_AUDIT (
     AUDIT_ID     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

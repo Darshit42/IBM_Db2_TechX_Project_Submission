@@ -100,7 +100,7 @@ class Catalog:
             if t.kind != "T":
                 continue
             for col in t.columns:
-                if not col.type.startswith("VARCHAR") or col.name.endswith(("NAME", "EMAIL", "SKU")):
+                if not col.type.startswith("VARCHAR") or col.name.endswith(("NAME", "EMAIL", "SKU", "TEXT", "URL", "AUTHOR", "_ID")):
                     continue
                 try:
                     cols, rows, _ = self.db.query(

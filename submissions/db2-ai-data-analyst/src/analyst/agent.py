@@ -6,7 +6,11 @@
       -> static guardrails (read-only, single statement, row cap)  [guardrails.py]
       -> Db2 EXPLAIN: validate + cost budget                       [explain.py]
       -> execute as least-privilege Db2 user
-      -> on any Db2 error: feed SQLSTATE/message back, retry
+      -> Db2 grain check: control queries prove totals are not
+         inflated by a join fan-out                                [grain.py]
+      -> on any Db2 error or failed grain check: feed Db2's evidence back, retry
+      -> optional voice-of-customer evidence: hybrid vector +
+         relational search over social posts in Db2               [social.py]
       -> Gemini summarises the result + suggests follow-ups
       -> audit row written through a Db2 stored procedure
 """
@@ -27,7 +31,9 @@ from .config import Settings, settings
 from .db import Db2, Db2Error
 from .embeddings import Embedder
 from .explain import Plan, explain
+from .grain import GrainChecker, GrainReport
 from .memory import Example, QueryMemory
+from .social import SocialEvidence, SocialFilter, SocialStore
 
 log = logging.getLogger("analyst")
 
@@ -42,11 +48,27 @@ class ChartSpec(BaseModel):
     series: Optional[str] = Field(default=None, description="Optional column that splits data into series")
 
 
+class SocialSearch(BaseModel):
+    query: str = Field(description="Short semantic search phrase describing what customers would say, "
+                                   "e.g. 'smartwatch strap broke, returning it'")
+    date_from: Optional[str] = Field(default=None, description="ISO date lower bound (YYYY-MM-DD) or null")
+    date_to: Optional[str] = Field(default=None, description="ISO date upper bound (YYYY-MM-DD) or null")
+    category: Optional[str] = Field(default=None, description="PRODUCTS.CATEGORY filter or null")
+    subcategory: Optional[str] = Field(default=None, description="PRODUCTS.SUBCATEGORY filter or null")
+    brand: Optional[str] = Field(default=None, description="Brand filter or null")
+    platform: Optional[Literal["REDDIT", "X", "REVIEW"]] = Field(default=None, description="Platform filter or null")
+
+
 class SqlDraft(BaseModel):
     reasoning: str = Field(description="One or two sentences on how the question maps to the schema")
     sql: str = Field(description="A single Db2 SELECT (or WITH) statement, no trailing semicolon")
     title: str = Field(description="Short title for the result, e.g. 'Monthly revenue, 2025'")
     chart: ChartSpec
+    social: Optional[SocialSearch] = Field(
+        default=None,
+        description="Fill ONLY when customer voice helps answer: 'why' questions about sales/returns/ratings, "
+                    "or questions about complaints, sentiment, what people say, Reddit, X/Twitter or reviews. "
+                    "Otherwise null.")
 
 
 class Insight(BaseModel):
@@ -75,6 +97,9 @@ Rules:
   still write the correct relative query.
 - Give every computed column a short UPPER_SNAKE_CASE alias. Order results meaningfully.
 - Return at most ~50 rows for rankings unless asked for more.
+- SOCIAL_POSTS holds customer posts (Reddit, X, reviews) with TOPIC and SENTIMENT. Use it in SQL for
+  volume / sentiment questions. For "why" questions, write SQL for the business metric (e.g. monthly
+  return rate) AND fill `social` so the app retrieves matching posts by semantic vector search.
 
 {schema}
 """
@@ -85,7 +110,9 @@ e.g. ₹1.47 Cr or ₹8.2 L; round percentages to one decimal),
 point out the most notable pattern, and never invent data that is not in the rows.
 Today is {today}; the dataset covers {date_range}. Periods before today are actuals, not projections.
 If a compared period is only partly covered by the data, say so explicitly, because it distorts the
-comparison."""
+comparison.
+When customer posts are provided, connect them to the numbers (timing, volume, what people complain
+about), quote at most two short phrases, name the platform, and call them customer posts, not facts."""
 
 
 @dataclass
@@ -115,6 +142,9 @@ class AskResult:
     elapsed_ms: int = 0
     audit_id: int | None = None
     used_memory_sql: bool = False
+    grain: dict | None = None
+    grain_caught: list[dict] = field(default_factory=list)
+    social: dict | None = None
 
     def to_dict(self) -> dict:
         return self.__dict__.copy()
@@ -127,6 +157,8 @@ class Analyst:
         self.catalog = Catalog(db, cfg.data_schema)
         self.embedder = Embedder(cfg)
         self.memory = QueryMemory(db, self.embedder, cfg)
+        self.grain = GrainChecker(db, self.catalog, cfg.data_schema)
+        self.social = SocialStore(db, self.embedder, cfg)
         self._llm = None
         self._date_range: str | None = None
 
@@ -204,7 +236,8 @@ class Analyst:
         chain = self._structured(SqlDraft)
         return chain.invoke(self._sql_messages(question, examples, history, feedback))
 
-    def _summarize(self, question: str, sql: str, cols: list[str], rows: list[list]) -> Insight:
+    def _summarize(self, question: str, sql: str, cols: list[str], rows: list[list],
+                   social: dict | None = None, caught: list[dict] | None = None) -> Insight:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         preview = [dict(zip(cols, r)) for r in rows[:40]]
@@ -212,6 +245,17 @@ class Analyst:
                 f"Data available: {self.date_range()}. Before answering, check every period the "
                 f"question compares against this range and mention any that are partly missing.\n\n"
                 f"Rows returned: {len(rows)} (showing up to 40)\n{json.dumps(preview, default=str)}")
+        if caught:
+            c = caught[0]
+            body += (f"\n\nNote: Db2's grain check rejected an earlier draft whose {c['aggregate']} was "
+                     f"inflated {c['factor']}x by a join; the rows above come from the corrected query. "
+                     f"Mention this in one short clause.")
+        if social and social.get("posts"):
+            posts = [{k: p[k] for k in ("platform", "channel", "date", "sentiment", "text")}
+                     for p in social["posts"]]
+            body += (f"\n\nCustomer posts matching '{social['query']}' (Db2 vector search; "
+                     f"{social['total_matches']} matches, by month: "
+                     f"{json.dumps(social['timeline'], default=str)}):\n{json.dumps(posts, default=str)}")
         chain = self._structured(Insight)
         system = SYSTEM_SUMMARY.format(today=dt.date.today().isoformat(), date_range=self.date_range())
         return chain.invoke([SystemMessage(system), HumanMessage(body)])
@@ -262,14 +306,37 @@ class Analyst:
         if res.status == "OK":
             res.title = ex.question
             res.chart = charts.infer(res.columns, res.rows)
+            self._check_grain(res)
+
+    def _check_grain(self, res: AskResult) -> GrainReport:
+        try:
+            report = self.grain.check(res.sql)
+        except Exception as e:  # never block an answer because the checker itself broke
+            log.warning("grain check failed: %s", e)
+            report = GrainReport(status="skipped", reason=f"checker error: {type(e).__name__}")
+        res.grain = report.to_dict()
+        res.attempts[-1]["grain"] = report.status
+        return report
 
     def _run_with_llm(self, res: AskResult, question: str, examples: list[Example], history: list[Turn]) -> None:
         feedback: list[tuple[str, str]] = []
-        for attempt in range(1, self.cfg.max_retries + 2):
+        draft = None
+        last = self.cfg.max_retries + 1
+        for attempt in range(1, last + 1):
             draft = self._draft_sql(question, examples, history, feedback)
             res.title, res.reasoning = draft.title, draft.reasoning
             ok = self._execute_candidate(res, draft.sql, attempt)
             if ok:
+                report = self._check_grain(res)
+                if report.status == "fail":
+                    res.grain_caught.extend(c.to_dict() for c in report.failures)
+                    if attempt < last:
+                        res.attempts[-1].update(stage="grain", error=report.feedback())
+                        feedback.append((draft.sql, report.feedback()))
+                        res.status = "ERROR"
+                        continue
+                    res.notes.append("Db2 grain check: this result double-counts rows (see trace); "
+                                     "treat the totals with caution.")
                 res.chart = charts.validate(draft.chart.model_dump(), res.columns, res.rows)
                 break
             if res.status == "BLOCKED":
@@ -277,13 +344,33 @@ class Analyst:
                 # into something the user did not ask for.
                 break
             feedback.append((draft.sql, res.attempts[-1]["error"]))
+        if res.status == "OK" and draft is not None and draft.social is not None:
+            res.social = self._social_evidence(draft.social)
         if res.status == "OK":
             try:
-                ins = self._summarize(question, res.sql, res.columns, res.rows)
+                fixed = res.grain_caught if res.grain and res.grain["status"] != "fail" else None
+                ins = self._summarize(question, res.sql, res.columns, res.rows, res.social, fixed)
                 res.answer, res.follow_ups = ins.answer, ins.follow_ups[:3]
             except Exception as e:
                 log.warning("summary failed: %s", e)
                 res.notes.append("Summary unavailable (model error); showing raw results.")
+
+    def _social_evidence(self, s: SocialSearch) -> dict | None:
+        if not self.social.available():
+            return None
+        f = SocialFilter(query=s.query, date_from=s.date_from, date_to=s.date_to, category=s.category,
+                         subcategory=s.subcategory, brand=s.brand, platform=s.platform)
+        try:
+            ev = SocialEvidence(f, posts=self.social.search(f), timeline=self.social.timeline(f))
+        except Exception as e:  # bad model-provided date, embedding quota, ...
+            log.warning("social search failed: %s", e)
+            try:  # retry without the model's filters, the usual culprit
+                f = SocialFilter(query=s.query)
+                ev = SocialEvidence(f, posts=self.social.search(f), timeline=self.social.timeline(f))
+            except Exception as e2:  # noqa: BLE001
+                log.warning("social search failed again: %s", e2)
+                return None
+        return ev.to_dict()
 
     def _execute_candidate(self, res: AskResult, sql: str, attempt: int) -> bool:
         rec: dict = {"attempt": attempt, "sql": sql}
@@ -330,6 +417,9 @@ class Analyst:
         details = json.dumps({
             "attempts": res.attempts, "plan": res.plan, "chart": res.chart,
             "memory_ids": [e["id"] for e in res.examples], "notes": res.notes,
+            "grain": res.grain, "grain_caught": res.grain_caught,
+            "social": ({k: v for k, v in res.social.items() if k != "posts"}
+                       | {"post_ids": [p["id"] for p in res.social["posts"]]}) if res.social else None,
         }, default=str)
         try:
             out = self.db.callproc(f"{self.cfg.app_schema}.LOG_QUERY", [
