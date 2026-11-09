@@ -149,5 +149,6 @@ def test_verify_endpoint_flags_the_dashboard_query(checker):
 
 def test_catalog_lists_view_values_for_filters(checker):
     text = checker.catalog.prompt_text()
-    view = text[text.index("VIEW RETAIL.V_SALES"):]
-    assert "Smartwatches" in view.split("\n\n")[0] or "Smartwatches" in view[:4000]
+    view = text[text.index("VIEW RETAIL.V_SALES"):]  # views are listed last
+    sub = next(line for line in view.splitlines() if line.strip().startswith("SUBCATEGORY"))
+    assert "Smartwatches" in sub

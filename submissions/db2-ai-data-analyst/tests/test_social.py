@@ -10,7 +10,7 @@ from analyst.social import SocialFilter, guess_topic, link_entities, score_senti
 from analyst.social_connectors import ConnectorError, fetch_reddit, fetch_x, load_file
 
 PRODUCTS = [
-    {"PRODUCT_ID": 1, "PRODUCT_NAME": "Kestrel Smartwatche Pro", "CATEGORY": "Electronics",
+    {"PRODUCT_ID": 1, "PRODUCT_NAME": "Kestrel Smartwatch Pro", "CATEGORY": "Electronics",
      "SUBCATEGORY": "Smartwatches", "BRAND": "Kestrel"},
     {"PRODUCT_ID": 2, "PRODUCT_NAME": "Saffron Footwear Go", "CATEGORY": "Fashion",
      "SUBCATEGORY": "Footwear", "BRAND": "Saffron"},
@@ -32,7 +32,7 @@ def test_sentiment_and_topic():
 
 
 def test_link_entities_prefers_product_then_brand_then_store():
-    assert link_entities("my kestrel smartwatche pro died", PRODUCTS, STORES) == (1, None, "Kestrel")
+    assert link_entities("my kestrel smartwatch pro died", PRODUCTS, STORES) == (1, None, "Kestrel")
     assert link_entities("Saffron shoes run small", PRODUCTS, STORES) == (None, None, "Saffron")
     assert link_entities("long queue at the Mathura store", PRODUCTS, STORES) == (None, 106, None)
 

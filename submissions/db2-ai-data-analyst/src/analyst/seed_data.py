@@ -51,6 +51,14 @@ CATALOG = {
                      ["Inkwell", "PlayNest", "BrainBox"], (99, 2999), (0.30, 0.50), 0.7, 0.5),
 }
 PAYMENTS = ["CARD", "UPI", "WALLET", "COD", "INVOICE"]
+_IRREGULAR = {"Smartwatches": "Smartwatch", "Accessories": "Accessory"}
+
+
+def singular(sub: str) -> str:
+    """Subcategory -> singular noun for product names ('Smartwatches' -> 'Smartwatch')."""
+    if sub in _IRREGULAR:
+        return _IRREGULAR[sub]
+    return sub[:-1] if sub.endswith("s") else sub
 
 
 @dataclass
@@ -121,7 +129,7 @@ def generate(n_customers: int = 3000, orders_per_day: float = 55.0, seed: int = 
                 price = round(math.exp(rnd.uniform(math.log(lo), math.log(hi))) / 10) * 10 - 1
                 price = max(price, lo)
                 cost = round(price * (1 - rnd.uniform(mlo, mhi)), 2)
-                name = f"{brand} {sub[:-1] if sub.endswith('s') else sub} {rnd.choice(['Lite', 'Pro', 'Max', 'Classic', 'Plus', 'Prime', 'Go', 'X'])}"
+                name = f"{brand} {singular(sub)} {rnd.choice(['Lite', 'Pro', 'Max', 'Classic', 'Plus', 'Prime', 'Go', 'X'])}"
                 sku = f"{cat[:3].upper()}-{pid}"
                 row = (pid, sku, name, cat, sub, brand, cost, float(price))
                 ds.products.append(row)

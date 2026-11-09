@@ -17,7 +17,7 @@ import datetime as dt
 import math
 import random
 
-from .seed_data import END, START
+from .seed_data import END, START, singular
 from .social import Post
 
 SEED = 4242
@@ -98,14 +98,10 @@ SERVICE = ("SERVICE", -0.2, [
 ])
 
 
-def _singular(sub: str) -> str:
-    return sub[:-1] if sub.endswith("s") else sub
-
-
 def _fill(tpl: str, product: dict | None, city: str) -> str:
     p = product or {}
     return tpl.format(p=p.get("PRODUCT_NAME", "order"), b=p.get("BRAND", "Bazaar"),
-                      s=_singular(p.get("SUBCATEGORY", "item")).lower(), c=city)
+                      s=singular(p.get("SUBCATEGORY", "item")).lower(), c=city)
 
 
 def _ts(rnd: random.Random, d: dt.date) -> dt.datetime:
