@@ -40,8 +40,8 @@ def test_link_entities_prefers_product_then_brand_then_store():
 def test_filter_clauses_are_parameterised():
     where, params = SocialFilter("x", date_from="2026-03-01", date_to="2026-07-31T00:00",
                                  subcategory="Smartwatches", platform="reddit").clauses()
-    assert where == ["sp.POST_DATE >= ?", "sp.POST_DATE <= ?", "UPPER(p.SUBCATEGORY) = UPPER(?)", "sp.PLATFORM = ?"]
-    assert params == ["2026-03-01", "2026-07-31", "Smartwatches", "REDDIT"]
+    assert where == ["sp.POST_DATE >= ?", "sp.POST_DATE <= ?", "UPPER(p.SUBCATEGORY) LIKE UPPER(?)", "sp.PLATFORM = ?"]
+    assert params == ["2026-03-01", "2026-07-31", "Smartwatche%", "REDDIT"]
     with pytest.raises(ValueError):
         SocialFilter("x", date_from="last spring").clauses()
 

@@ -96,6 +96,12 @@ def explain_sql(req: SqlRequest):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/verify")
+def verify_sql(req: SqlRequest):
+    """Paste any existing report query: Db2 validates it, costs it, runs it read-only and proves its totals."""
+    return analyst().verify(req.sql)
+
+
 @app.get("/api/schema")
 def schema(refresh: bool = False):
     if refresh:

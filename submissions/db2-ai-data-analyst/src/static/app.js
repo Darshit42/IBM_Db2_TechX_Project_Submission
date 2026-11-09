@@ -158,6 +158,46 @@ function renderPost(p) {
   </div>`;
 }
 
+const VERIFY_TRAP = `-- Dashboard tile: "Shipping fees by category"
+SELECT p.CATEGORY, SUM(o.SHIPPING_FEE) AS SHIPPING_FEES
+FROM RETAIL.ORDERS o
+JOIN RETAIL.ORDER_ITEMS i ON i.ORDER_ID = o.ORDER_ID
+JOIN RETAIL.PRODUCTS p ON p.PRODUCT_ID = i.PRODUCT_ID
+WHERE o.STATUS = 'COMPLETED'
+GROUP BY p.CATEGORY
+ORDER BY SHIPPING_FEES DESC`;
+const VERIFY_GOOD = `-- Revenue by category (one row per order line, no fan-out)
+SELECT p.CATEGORY, SUM(v.NET_REVENUE) AS REVENUE
+FROM RETAIL.V_SALES v
+JOIN RETAIL.PRODUCTS p ON p.PRODUCT_ID = v.PRODUCT_ID
+WHERE v.STATUS = 'COMPLETED'
+GROUP BY p.CATEGORY
+ORDER BY REVENUE DESC`;
+
+function initVerify() {
+  const ta = $("#verify-sql");
+  ta.value = VERIFY_TRAP;
+  $("#verify-good").onclick = () => { ta.value = VERIFY_GOOD; };
+  $("#verify-form").onsubmit = async e => {
+    e.preventDefault();
+    const sql = ta.value.trim(); if (!sql) return;
+    $("#welcome")?.remove();
+    const card = $("#card-tpl").content.firstElementChild.cloneNode(true);
+    $(".card-q", card).textContent = "Verify this query with Db2";
+    card.classList.add("verify-card");
+    thread.appendChild(card);
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    try {
+      const r = await api("/api/verify", { method: "POST", body: JSON.stringify({ sql }) });
+      r.title = r.grain?.status === "fail" ? "Db2 found a wrong total in this query"
+        : r.grain?.status === "pass" ? "Db2 verified the totals in this query" : "Query result";
+      renderResult(card, r);
+    } catch (err) {
+      $(".card-body", card).innerHTML = `<div class="error-box">${esc(err.message)}</div>`;
+    } finally { loadStats(); }
+  };
+}
+
 async function loadSchema() {
   const el = $("#schema");
   if (el.dataset.loaded) return;
@@ -213,7 +253,7 @@ function renderResult(card, r) {
     parts.push(`<div class="followups">${r.follow_ups.map(f => `<button>${esc(f)}</button>`).join("")}</div>`);
   }
   if (r.status === "OK") {
-    parts.push(`<div class="actions">
+    if (!r.question?.startsWith("[verify]")) parts.push(`<div class="actions">
       <button class="save">👍 Correct — save to Db2 memory</button>
       <button class="copy">Copy SQL</button>
       <button class="csv">Download CSV</button></div>`);
@@ -240,7 +280,7 @@ function renderResult(card, r) {
       body.querySelectorAll(".view-toggle button").forEach(x => x.classList.toggle("on", x === b));
       viz.hidden = b.dataset.v !== "chart"; tbl.hidden = b.dataset.v !== "table";
     }));
-    $(".save", body).addEventListener("click", async (e) => {
+    $(".save", body)?.addEventListener("click", async (e) => {
       const b = e.currentTarget; b.disabled = true;
       try {
         const out = await api("/api/feedback", { method: "POST", body: JSON.stringify({ question: r.question, sql: r.sql }) });
@@ -248,8 +288,8 @@ function renderResult(card, r) {
         loadStats();
       } catch (err) { b.disabled = false; alertInline(body, err.message); }
     });
-    $(".copy", body).addEventListener("click", e => { navigator.clipboard.writeText(r.sql); e.currentTarget.textContent = "Copied"; });
-    $(".csv", body).addEventListener("click", () => downloadCsv(r));
+    $(".copy", body)?.addEventListener("click", e => { navigator.clipboard.writeText(r.sql); e.currentTarget.textContent = "Copied"; });
+    $(".csv", body)?.addEventListener("click", () => downloadCsv(r));
   }
   body.querySelectorAll(".followups button").forEach(b => b.addEventListener("click", () => ask(b.textContent)));
 }
@@ -266,6 +306,13 @@ function renderVerification(r) {
       counted rows of ${esc(c.grain_table)} more than once (${c.source_rows.toLocaleString()} rows became
       ${c.joined_rows.toLocaleString()} after the join): ${money(c.naive_value)} instead of ${money(c.exact_value)},
       <b>${c.factor}× inflated</b>. The query was rewritten and re-verified.</div>`;
+  }
+  if (g.status === "fail" && r.question?.startsWith("[verify]")) {
+    return g.checks.filter(c => c.status === "fail").map(c => `<div class="verify bad"><b>Wrong total.</b>
+      <code>${esc(c.aggregate)}</code> is summed after a join that repeats rows of ${esc(c.grain_table)}:
+      ${c.source_rows.toLocaleString()} source rows became ${c.joined_rows.toLocaleString()} joined rows, so this query reports
+      <b>${money(c.naive_value)}</b> where Db2 computes <b>${money(c.exact_value)}</b> over distinct rows
+      (<b>${c.factor}× inflated</b>). Aggregate ${esc(c.grain_table.split(".").pop())} before joining.</div>`).join("");
   }
   if (g.status === "fail") {
     const c = caught[caught.length - 1] || {};
@@ -441,5 +488,6 @@ ta.addEventListener("input", () => autosize(ta));
 ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });
 $("#composer").addEventListener("submit", e => { e.preventDefault(); const q = ta.value; ta.value = ""; autosize(ta); ask(q); });
 initTabs();
+initVerify();
 loadHealth();
 loadStats();

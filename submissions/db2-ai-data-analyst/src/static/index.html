@@ -24,6 +24,7 @@
       <button class="tab active" data-tab="examples">Try</button>
       <button class="tab" data-tab="history">History</button>
       <button class="tab" data-tab="social">Social</button>
+      <button class="tab" data-tab="verify">Verify</button>
       <button class="tab" data-tab="memory">Memory</button>
       <button class="tab" data-tab="schema">Schema</button>
     </nav>
@@ -38,6 +39,15 @@
       <ul class="list" id="memory"></ul>
     </section>
     <section class="panel" id="panel-social"><div id="social"></div></section>
+    <section class="panel" id="panel-verify">
+      <p class="hint">Paste an existing report or dashboard query. Db2 validates and costs it, runs it as the read-only
+        user, and <b>proves its totals</b> with grain-check control queries.</p>
+      <form id="verify-form" class="verify-form">
+        <textarea id="verify-sql" rows="9" spellcheck="false"></textarea>
+        <div class="verify-actions"><button type="submit">Verify with Db2</button>
+          <button type="button" id="verify-good" class="ghost">load a correct query</button></div>
+      </form>
+    </section>
     <section class="panel" id="panel-schema"><div id="schema"></div></section>
 
     <div class="stats" id="stats"></div>

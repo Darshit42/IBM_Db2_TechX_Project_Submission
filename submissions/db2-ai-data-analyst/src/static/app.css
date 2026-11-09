@@ -215,6 +215,12 @@ pre.sql { background: var(--code-bg); border: 1px solid var(--border); border-ra
 .senti.mid { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .post-text { margin: 5px 0 4px; }
 .post-meta { color: var(--muted); font-size: 11px; }
+.verify-form textarea { width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: 8px; background: var(--code-bg);
+  color: var(--text); padding: 8px 10px; font: 12px/1.45 "IBM Plex Mono", monospace; }
+.verify-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.verify-actions button { background: var(--accent); color: #fff; border: 0; border-radius: 7px; padding: 6px 12px; font-size: 12.5px; }
+.verify-actions button.ghost { background: none; color: var(--accent); padding: 6px 4px; }
+.verify-card .card-q::before { content: "✓"; }
 .social-form { display: flex; gap: 6px; margin: 12px 0 8px; }
 .social-form input { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); padding: 6px 9px; font: inherit; font-size: 12.5px; }
 .social-form button { background: var(--accent); color: #fff; border: 0; border-radius: 7px; padding: 6px 11px; font-size: 12.5px; }

@@ -135,3 +135,19 @@ def test_db2_passes_a_correct_join(checker):
     report = checker.check(sql)
     assert report.status == "pass"
     assert report.checks[0].naive_value == report.checks[0].exact_value
+
+
+def test_verify_endpoint_flags_the_dashboard_query(checker):
+    from analyst.agent import Analyst
+
+    out = Analyst(checker.db).verify(FANOUT)
+    assert out["status"] == "OK" and out["rows"]
+    assert out["grain"]["status"] == "fail"
+    assert out["grain_caught"][0]["aggregate"] == "SUM(o.SHIPPING_FEE)"
+    assert out["audit_id"]  # verification is audited like any question
+
+
+def test_catalog_lists_view_values_for_filters(checker):
+    text = checker.catalog.prompt_text()
+    view = text[text.index("VIEW RETAIL.V_SALES"):]
+    assert "Smartwatches" in view.split("\n\n")[0] or "Smartwatches" in view[:4000]

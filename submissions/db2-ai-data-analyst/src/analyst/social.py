@@ -56,12 +56,13 @@ class SocialFilter:
         if self.date_to:
             where.append("sp.POST_DATE <= ?")
             params.append(_date(self.date_to))
+        # Prefix match so 'Smartwatch' finds 'Smartwatches' (models often singularise).
         if self.category:
-            where.append("UPPER(p.CATEGORY) = UPPER(?)")
-            params.append(self.category)
+            where.append("UPPER(p.CATEGORY) LIKE UPPER(?)")
+            params.append(_prefix(self.category))
         if self.subcategory:
-            where.append("UPPER(p.SUBCATEGORY) = UPPER(?)")
-            params.append(self.subcategory)
+            where.append("UPPER(p.SUBCATEGORY) LIKE UPPER(?)")
+            params.append(_prefix(self.subcategory))
         if self.brand:
             where.append("UPPER(COALESCE(p.BRAND, sp.BRAND)) = UPPER(?)")
             params.append(self.brand)
@@ -69,6 +70,11 @@ class SocialFilter:
             where.append("sp.PLATFORM = ?")
             params.append(self.platform.upper())
         return where, params
+
+
+def _prefix(v: str) -> str:
+    v = v.strip().replace("%", "").replace("_", " ")
+    return (v[:-1] if v.lower().endswith("s") else v) + "%"
 
 
 def _date(v: str) -> str:

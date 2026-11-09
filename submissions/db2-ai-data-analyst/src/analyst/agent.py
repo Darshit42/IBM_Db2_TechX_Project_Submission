@@ -337,6 +337,16 @@ class Analyst:
                         continue
                     res.notes.append("Db2 grain check: this result double-counts rows (see trace); "
                                      "treat the totals with caution.")
+                if not res.rows and attempt < last and not res.attempts[-1].get("empty_checked"):
+                    # An empty answer is often a wrong literal ('Smartwatch' vs 'Smartwatches').
+                    res.attempts[-1].update(stage="empty", empty_checked=True,
+                                            error="Db2 returned 0 rows; re-checking filter values.")
+                    feedback.append((draft.sql, "The query ran but Db2 returned 0 rows. Check every string "
+                                     "literal against the sample values listed in the schema (exact spelling and "
+                                     "case) and the date range of the data. If 0 rows is truly correct, return "
+                                     "the same query."))
+                    res.status = "ERROR"
+                    continue
                 res.chart = charts.validate(draft.chart.model_dump(), res.columns, res.rows)
                 break
             if res.status == "BLOCKED":
@@ -432,6 +442,20 @@ class Analyst:
         except Db2Error as e:
             log.warning("audit failed: %s", e)
             return None
+
+    # -- verify an existing query ----------------------------------------------
+    def verify(self, sql: str) -> dict:
+        """Audit a hand-written / dashboard query: guardrails, EXPLAIN, run read-only, grain check."""
+        res = AskResult(question="[verify] " + sql.strip()[:200], status="ERROR")
+        t0 = time.time()
+        if self._execute_candidate(res, sql, attempt=1):
+            self._check_grain(res)
+            res.chart = charts.infer(res.columns, res.rows)
+        res.elapsed_ms = int((time.time() - t0) * 1000)
+        if res.grain and res.grain["status"] == "fail":
+            res.grain_caught = [c for c in res.grain["checks"] if c["status"] == "fail"]
+        res.audit_id = self._audit(res)
+        return res.to_dict()
 
     # -- feedback -------------------------------------------------------------
     def remember(self, question: str, sql: str) -> int:

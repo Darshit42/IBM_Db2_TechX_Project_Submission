@@ -95,7 +95,10 @@ class Catalog:
         self._sample_values(tables)
         return list(tables.values())
 
+    MAX_SAMPLES = 40
+
     def _sample_values(self, tables: dict[str, Table]) -> None:
+        by_name: dict[str, list[str]] = {}
         for t in tables.values():
             if t.kind != "T":
                 continue
@@ -105,12 +108,19 @@ class Catalog:
                 try:
                     cols, rows, _ = self.db.query(
                         f'SELECT DISTINCT "{col.name}" FROM "{self.schema}"."{t.name}" '
-                        f"FETCH FIRST 13 ROWS ONLY"
+                        f"FETCH FIRST {self.MAX_SAMPLES + 1} ROWS ONLY"
                     )
                 except Exception:
                     continue
-                if len(rows) <= 12:
+                if len(rows) <= self.MAX_SAMPLES:
                     col.samples = sorted(str(r[0]) for r in rows if r[0] is not None)
+                    by_name.setdefault(col.name, col.samples)
+        # Views expose the same values as their base columns (e.g. V_SALES.SUBCATEGORY).
+        for t in tables.values():
+            if t.kind == "V":
+                for col in t.columns:
+                    if col.type.startswith("VARCHAR") and col.name in by_name:
+                        col.samples = by_name[col.name]
 
     # -- renderings ---------------------------------------------------------
     def prompt_text(self) -> str:
